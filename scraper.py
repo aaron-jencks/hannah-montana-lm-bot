@@ -1,4 +1,7 @@
 import argparse
+import logging
+import pathlib
+import random
 import re
 import time
 from typing import List, Tuple
@@ -8,6 +11,10 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.expected_conditions import presence_of_element_located
 from selenium.webdriver.support.wait import WebDriverWait
+
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
 PAGE_TIMEOUT = 10
@@ -84,25 +91,47 @@ def parse_story(url) -> str:
 if __name__ == '__main__':
     ap = argparse.ArgumentParser(description='Scrape the fanfiction from the website')
     ap.add_argument('--mature', action='store_true', help='Include mature stories')
+    ap.add_argument('--output', type=pathlib.Path, default=pathlib.Path('./corpus.txt'), help='Output file')
+    ap.add_argument('--count', type=int, default=-1, help='Number of stories to scrape')
+    ap.add_argument('--seed', type=int, default=42, help='Random seed')
     args = ap.parse_args()
+
+    random.seed(args.seed)
 
     base_url = 'https://www.fanfiction.net/tv/Hannah-Montana/?&srt=1&r=103'
     if args.mature:
         base_url = base_url[:-1]
 
     pc = get_page_count(base_url)
-    print(f"Found {pc} fanfiction pages")
+    logger.info(f"Found {pc} fanfiction pages")
     time.sleep(5)
 
+    shuffled_pages = list(range(pc))
+    random.shuffle(shuffled_pages)
+
     story_texts = []
-    for page in range(pc):
+    for page in shuffled_pages:
         page += 1
-        print(f"Parsing page {page}")
+        logger.info(f"Parsing page {page}")
         stories = parse_story_list(base_url, page)
-        print(f"Found {len(stories)} stories")
+        random.shuffle(stories)
+        logger.info(f"Found {len(stories)} stories")
         for story in stories:
             title, url = story
+            logger.info(f"Parsing story '{title}'")
             text = parse_story(url)
             story_texts.append((title, text))
+            if 0 < args.count == len(story_texts):
+                break
             time.sleep(5)
-        break
+        if 0 < args.count == len(story_texts):
+            break
+
+    with open(args.output, 'w+') as fp:
+        lines = []
+        for title, text in story_texts:
+            flattened_text = text.replace('\n', ' <br> ')
+            flattened_title = title.replace('\n', ' <br> ')
+            lines.append(f'<title> {flattened_title} </title> <story> {flattened_text} </story>')
+        s = '\n'.join(lines)
+        fp.write(s)
