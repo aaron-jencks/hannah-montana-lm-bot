@@ -1,3 +1,4 @@
 selenium
 tokenizers
+transformers[torch]
 tqdm
