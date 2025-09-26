@@ -4,6 +4,7 @@ import os
 import pathlib
 
 from tokenizers.implementations import ByteLevelBPETokenizer
+from transformers import GPT2TokenizerFast
 
 
 logging.basicConfig(level=logging.INFO)
@@ -25,6 +26,7 @@ if __name__ == '__main__':
         type=str,
         help="The name of the output vocab files"
     )
+    parser.add_argument('--cpus', type=int, default=os.cpu_count(), help='the number of cores to use')
     args = parser.parse_args()
 
     logger.info('training tokenizer...')
@@ -40,7 +42,8 @@ if __name__ == '__main__':
         special_tokens=[
             '<title>', '</title>',
             '<story>', '</story>',
-            '<br>'
+            '<br>',
+            '<document>', '</document>',
         ]
     )
 
@@ -53,4 +56,36 @@ if __name__ == '__main__':
     # Save the files
     tokenizer.save_model(str(args.output_directory), args.name)
 
-    logger.info('done')
+    logger.info('applying tokenizer...')
+    logger.info('reloading tokenizer...')
+
+    vocab_fname = args.output_directory / "{}-vocab.json".format(args.name)
+    merges_fname = args.output_directory / "{}-merges.txt".format(args.name)
+
+    print(f'reading data from {str(vocab_fname)} and {str(merges_fname)}')
+
+    tokenizer = GPT2TokenizerFast(
+        str(vocab_fname), str(merges_fname),
+        add_prefix_space=True,
+        bos_token='<document>',
+        eos_token='</document>',
+        unk_token='<unk>',
+    )
+    tokenizer.add_special_tokens({
+        'pad_token': '<pad>',
+        'additional_special_tokens': [
+            '<title>',
+            '</title>',
+            '<story>',
+            '</story>',
+            '<br>',
+        ],
+    })
+
+    with open(args.input, 'r') as fp:
+        lines = fp.read().splitlines(keepends=False)
+
+    first_row_ids = tokenizer([lines[0]])['input_ids'][0]
+    print(f'First row encoded:')
+    print(f'ids: {first_row_ids}')
+    print(f'tokens: {tokenizer.convert_ids_to_tokens(first_row_ids)}')
