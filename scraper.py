@@ -8,6 +8,7 @@ import time
 from typing import List, Tuple, Optional, Dict, Any
 
 from selenium import webdriver
+from selenium.common import TimeoutException
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.expected_conditions import presence_of_element_located
@@ -73,17 +74,27 @@ def parse_story_list(base_url: str, page: int) -> List[Tuple[str, str]]:
     return stories
 
 
-def parse_story(url) -> str:
+def parse_story(url) -> Optional[str]:
     driver = create_browser()
     driver.get(url)
-    element = WebDriverWait(driver, PAGE_TIMEOUT).until(
-        presence_of_element_located(
-            (
-                By.CSS_SELECTOR,
-                "div.storytextp"
+    try:
+        element = WebDriverWait(driver, PAGE_TIMEOUT).until(
+            presence_of_element_located(
+                (
+                    By.CSS_SELECTOR,
+                    "div.storytextp"
+                )
             )
         )
-    )
+    except TimeoutException:
+        WebDriverWait(driver, PAGE_TIMEOUT).until(
+            presence_of_element_located(
+                (By.CSS_SELECTOR, "span.gui_warning")
+            )
+        )
+        logger.warning(f"URL {url} returned not found")
+        driver.close()
+        return None
     story_text = element.text
     driver.close()
     return story_text
@@ -170,6 +181,9 @@ if __name__ == '__main__':
         for story in stories:
             title, url = story
             text = parse_story(url)
+            if text is None:
+                logger.warning(f"Could not retrieve story '{title}'")
+                continue
             logger.info(f"Parsed story '{title}': {len(text)} characters")
             story_texts.append((title, text))
             if 0 < args.count == len(story_texts):
