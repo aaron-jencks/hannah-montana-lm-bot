@@ -1,10 +1,11 @@
 import argparse
+import json
 import logging
 import pathlib
 import random
 import re
 import time
-from typing import List, Tuple
+from typing import List, Tuple, Optional, Dict, Any
 
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
@@ -88,12 +89,55 @@ def parse_story(url) -> str:
     return story_text
 
 
+def make_corpus_entry(title: str, story: str) -> str:
+    flattened_text = story.replace('\n', ' <br> ')
+    flattened_title = title.replace('\n', ' <br> ')
+    return f'<document> <title> {flattened_title} </title> <story> {flattened_text} </story> </document>'
+
+
+class Scraper:
+    def __init__(self, base_url: str):
+        self.base_url = base_url
+        self.page = 0
+        self.page_count: Optional[int] = None
+
+    def restore_from_dict(self, data: Dict[str, Any]):
+        self.page = data['page']
+        self.page_count = data['page_count']
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            'page': self.page,
+            'page_count': self.page_count,
+        }
+
+
+def save_stories(
+        stories: List[Tuple[str, str]], corpus_path: pathlib.Path,
+        metadata: Scraper, metadata_path: pathlib.Path
+):
+    logger.info(f'Saving {len(stories)} stories')
+
+    with open(corpus_path, "a+") as fp:
+        lines = [make_corpus_entry(title, text) for title, text in stories]
+        fp.write('\n'.join(lines) + '\n')
+
+    with open(corpus_path, 'r') as fp:
+        lines = fp.read().splitlines()
+        logger.info(f'There are currently {len(lines)} lines in the corpus')
+
+    metadata_dict = metadata.to_dict()
+    with open(metadata_path, "w+") as fp:
+        json.dump(metadata_dict, fp)
+
+
 if __name__ == '__main__':
     ap = argparse.ArgumentParser(description='Scrape the fanfiction from the website')
     ap.add_argument('--mature', action='store_true', help='Include mature stories')
     ap.add_argument('--output', type=pathlib.Path, default=pathlib.Path('./corpus.txt'), help='Output file')
     ap.add_argument('--count', type=int, default=-1, help='Number of stories to scrape')
     ap.add_argument('--seed', type=int, default=42, help='Random seed')
+    ap.add_argument('--checkpoint', type=pathlib.Path, default=pathlib.Path('./scraping-checkpoint.json'), help='Checkpoint file for scraping progress')
     args = ap.parse_args()
 
     random.seed(args.seed)
@@ -102,36 +146,37 @@ if __name__ == '__main__':
     if args.mature:
         base_url = base_url[:-1]
 
-    pc = get_page_count(base_url)
-    logger.info(f"Found {pc} fanfiction pages")
-    time.sleep(5)
+    state = Scraper(base_url)
 
-    shuffled_pages = list(range(pc))
-    random.shuffle(shuffled_pages)
+    from_scratch = not args.checkpoint.exists()
+    if not from_scratch:
+        with open(args.checkpoint) as fp:
+            checkpoint = json.load(fp)
+        state.restore_from_dict(checkpoint)
+    else:
+        pc = get_page_count(base_url)
+        state.page_count = pc
+        logger.info(f"Found {pc} fanfiction pages")
+        time.sleep(3)
 
-    story_texts = []
-    for page in shuffled_pages:
-        page += 1
-        logger.info(f"Parsing page {page}")
-        stories = parse_story_list(base_url, page)
-        random.shuffle(stories)
+    while state.page < state.page_count:
+        state.page += 1
+        logger.info(f"Parsing page {state.page}")
+        stories = parse_story_list(base_url, state.page)
+        # random.shuffle(stories)
         logger.info(f"Found {len(stories)} stories")
+        time.sleep(3)
+        story_texts = []
         for story in stories:
             title, url = story
-            logger.info(f"Parsing story '{title}'")
             text = parse_story(url)
+            logger.info(f"Parsed story '{title}': {len(text)} characters")
             story_texts.append((title, text))
             if 0 < args.count == len(story_texts):
                 break
-            time.sleep(5)
+            time.sleep(3)
+        save_stories(story_texts, args.output, state, args.checkpoint)
         if 0 < args.count == len(story_texts):
             break
 
-    with open(args.output, 'w+') as fp:
-        lines = []
-        for title, text in story_texts:
-            flattened_text = text.replace('\n', ' <br> ')
-            flattened_title = title.replace('\n', ' <br> ')
-            lines.append(f'<document> <title> {flattened_title} </title> <story> {flattened_text} </story> </document>')
-        s = '\n'.join(lines)
-        fp.write(s)
+    logger.info('Scraping complete!')
