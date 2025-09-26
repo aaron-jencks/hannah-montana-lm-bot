@@ -1,30 +1,59 @@
 import argparse
-import random
 import re
 import time
 from typing import List, Tuple
-from urllib.robotparser import RobotFileParser
 
 from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
+from selenium.webdriver.support.expected_conditions import presence_of_element_located
+from selenium.webdriver.support.wait import WebDriverWait
+
+
+PAGE_TIMEOUT = 10
+
+
+def create_browser() -> webdriver.Chrome:
+    options = Options()
+    # options.add_argument("--headless")
+    driver = webdriver.Chrome(options=options)
+    return driver
 
 
 def format_url(base_url: str, page: int = 1) -> str:
     return f"{base_url}&p={page}"
 
 
-def get_page_count(driver: webdriver.Chrome) -> int:
-    element = driver.find_element(By.CSS_SELECTOR, "#content_wrapper_inner > center:nth-child(9) > a:nth-child(6)")
+def get_page_count(base_url: str) -> int:
+    driver = create_browser()
+    driver.get(base_url)
+    element = WebDriverWait(driver, PAGE_TIMEOUT).until(
+        presence_of_element_located(
+            (
+                By.CSS_SELECTOR,
+                "#content_wrapper_inner > center:nth-child(9) > a:nth-child(6)"
+            )
+        )
+    )
     url = element.get_attribute("href")
+    driver.close()
     m = re.search(r'&p=(?P<count>\d+)', url)
     if m is None:
         raise Exception(f"Could not parse page count for {url}")
     return int(m.group("count"))
 
 
-def parse_story_list(driver: webdriver.Chrome) -> List[Tuple[str, str]]:
-    # div.z-list:nth-child(12)
-    t = driver.page_source
+def parse_story_list(base_url: str, page: int) -> List[Tuple[str, str]]:
+    driver = create_browser()
+    driver.get(format_url(base_url, page))
+    WebDriverWait(driver, PAGE_TIMEOUT).until(
+        presence_of_element_located(
+            (
+                By.CSS_SELECTOR,
+                "div.z-list"
+            )
+        )
+    )
     elements = driver.find_elements(By.CSS_SELECTOR, "div.z-list")
     stories = []
     for element in elements:
@@ -32,7 +61,24 @@ def parse_story_list(driver: webdriver.Chrome) -> List[Tuple[str, str]]:
         title = info.text
         story_url = info.get_attribute("href")
         stories.append((title, story_url))
+    driver.close()
     return stories
+
+
+def parse_story(url) -> str:
+    driver = create_browser()
+    driver.get(url)
+    element = WebDriverWait(driver, PAGE_TIMEOUT).until(
+        presence_of_element_located(
+            (
+                By.CSS_SELECTOR,
+                "div.storytextp"
+            )
+        )
+    )
+    story_text = element.text
+    driver.close()
+    return story_text
 
 
 if __name__ == '__main__':
@@ -44,25 +90,19 @@ if __name__ == '__main__':
     if args.mature:
         base_url = base_url[:-1]
 
-    driver = webdriver.Chrome()
-    driver.get(base_url)
-
-    pc = get_page_count(driver)
+    pc = get_page_count(base_url)
     print(f"Found {pc} fanfiction pages")
-    driver.close()
     time.sleep(5)
 
-    order = list(range(1, pc))
-    random.shuffle(order)
-
-    for page in order:
+    story_texts = []
+    for page in range(pc):
         page += 1
         print(f"Parsing page {page}")
-        url = format_url(base_url, page)
-        driver.get(url)
-        stories = parse_story_list(driver)
+        stories = parse_story_list(base_url, page)
         print(f"Found {len(stories)} stories")
-        print(stories)
+        for story in stories:
+            title, url = story
+            text = parse_story(url)
+            story_texts.append((title, text))
+            time.sleep(5)
         break
-
-    driver.close()
