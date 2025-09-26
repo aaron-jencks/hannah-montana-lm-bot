@@ -48,9 +48,9 @@ if __name__ == '__main__':
     os.makedirs(args.output_directory, exist_ok=True)
 
     # output_fname = (args.out / args.name).with_suffix('.tok')
-    logger.info(f'saving tokenizer to {args.out} with prefix {args.name}')
+    logger.info(f'saving tokenizer to {args.output_directory} with prefix {args.name}')
 
     # Save the files
-    tokenizer.save_model(str(args.out), args.name)
+    tokenizer.save_model(str(args.output_directory), args.name)
 
     logger.info('done')
