@@ -132,6 +132,6 @@ if __name__ == '__main__':
         for title, text in story_texts:
             flattened_text = text.replace('\n', ' <br> ')
             flattened_title = title.replace('\n', ' <br> ')
-            lines.append(f'<title> {flattened_title} </title> <story> {flattened_text} </story>')
+            lines.append(f'<document> <title> {flattened_title} </title> <story> {flattened_text} </story> </document>')
         s = '\n'.join(lines)
         fp.write(s)
