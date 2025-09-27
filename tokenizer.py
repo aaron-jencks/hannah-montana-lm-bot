@@ -48,6 +48,7 @@ if __name__ == '__main__':
     parser.add_argument('--cpus', type=int, default=os.cpu_count(), help='the number of cores to use')
     parser.add_argument('--validation-ratio', type=float, default=0.2, help='the ratio of validation set size')
     parser.add_argument('--token-directory', type=pathlib.Path, default=pathlib.Path("."), help='Path to the output token directory')
+    parser.add_argument('--vocab-size', type=int, default=1000, help='the size of the vocabulary to train')
     args = parser.parse_args()
 
     logger.info('training tokenizer...')
@@ -57,7 +58,7 @@ if __name__ == '__main__':
     # And then train
     tokenizer.train(
         str(args.input),
-        vocab_size=50000,
+        vocab_size=args.vocab_size,
         min_frequency=2,
         show_progress=True,
         special_tokens=[
