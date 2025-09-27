@@ -1,11 +1,15 @@
 import argparse
 import logging
 import pathlib
-from typing import List
+import random
+import time
 
 import numpy as np
 import torch
 from torch import nn
+from torch import optim
+from torch.optim.lr_scheduler import LinearLR
+from torch.utils.data import Dataset, DataLoader
 from transformers import GPT2TokenizerFast
 
 logging.basicConfig(level=logging.INFO)
@@ -39,6 +43,22 @@ def load_tokenizer(directory: pathlib.Path, name: str) -> GPT2TokenizerFast:
     })
 
     return tokenizer
+
+
+class TokenWindowDataset(Dataset):
+    def __init__(self, path: pathlib.Path, block_size: int, dtype: np.dtype = np.uint16):
+        self.ids = np.memmap(path, dtype=dtype, mode="r")
+        self.block_size = block_size
+        self.n = self.ids.shape[0]
+        self.num_windows = max(0, (self.n - (block_size + 1)) + 1)
+
+    def __len__(self):
+        return self.num_windows
+
+    def __getitem__(self, idx):
+        x = torch.from_numpy(self.ids[idx:idx + self.block_size].astype(np.int64))
+        y = torch.from_numpy(self.ids[idx + 1:idx + 1 + self.block_size].astype(np.int64))
+        return x, y
 
 
 # https://pytorch-tutorials-preview.netlify.app/beginner/transformer_tutorial.html
@@ -92,23 +112,36 @@ class TransformerModel(nn.Module):
         return x
 
 
-class ModelWrapper:
-    def __init__(self, model: TransformerModel, tokenizer: GPT2TokenizerFast):
-        self.model = model
-        self.tokenizer = tokenizer
+@torch.no_grad()
+def evaluate_perplexity(model: nn.Module, val_loader: DataLoader, device: str = "cuda"):
+    model.eval()
+    total_loss = 0.0
+    total_tokens = 0
 
-    def get_next_character_probs(self, context: str) -> np.ndarray:
-        idxs = self.tokenizer(context, return_tensors='pt')
-        input_tensor = idxs['input_ids']
-        out = self.model(input_tensor)
-        probs = out.squeeze(0)[-1].cpu().detach().numpy()
-        return probs
+    nll_loss = nn.NLLLoss(ignore_index=-100, reduction="sum")
+
+    for x, y in val_loader:
+        x = x.to(device)
+        y = y.to(device)
+
+        # model must return log-probs: (B, T, V)
+        log_probs = model(x)
+
+        loss = nll_loss(
+            log_probs.view(-1, log_probs.size(-1)),
+            y.view(-1)
+        )
+
+        total_loss += loss.item()
+        total_tokens += y.sum().item()
+
+    avg_nll = total_loss / total_tokens
+    ppl = torch.exp(torch.tensor(avg_nll))
+    return ppl.item()
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--tokenizer-directory', type=pathlib.Path, default=pathlib.Path('.'), help='the location of the tokenizer files')
-    parser.add_argument('--tokenizer-name', type=str, default='bpe-bytelevel', help='the name of the tokenizer')
     parser.add_argument('--token-directory', type=pathlib.Path, default=pathlib.Path('.'), help='the location of the tokens')
     parser.add_argument('--checkpoint-directory', type=pathlib.Path, default=pathlib.Path('.'), help='the location to store model checkpoints')
     parser.add_argument('--epochs', type=int, default=100, help='the number of epochs to train')
@@ -118,9 +151,72 @@ if __name__ == "__main__":
     parser.add_argument('--head', type=int, default=12, help='the head size of the transformer')
     parser.add_argument('--layers', type=int, default=12, help='the number of layers of the transformer')
     parser.add_argument('--model-dimension', type=int, default=768, help='the dimension of the model')
+    parser.add_argument('--hidden-dimension', type=int, default=2048, help='the internal dimension of the model')
     parser.add_argument('--dropout', type=float, default=0.1, help='the dropout rate of the transformer')
     parser.add_argument('--seed', type=int, default=42, help='the random seed')
     parser.add_argument('--vocab-size', type=int, default=1000, help='the size of the vocab')
+    parser.add_argument('--context-length', type=int, default=1024, help='the maximum sequence length')
     args = parser.parse_args()
 
-    tokenizer = load_tokenizer(args.token_directory, args.tokenizer_name)
+    use_cuda = torch.cuda.is_available()
+    device = 'cpu' if not use_cuda else 'cuda'
+    logger.info("training classifier")
+    logger.info(f"training on: {device}")
+
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    if use_cuda:
+        torch.cuda.manual_seed_all(args.seed)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+
+    logger.info(f'Loading tokens from {str(args.token_directory)}')
+    train_ds = TokenWindowDataset(args.token_directory / 'train.bin', args.context_length)
+    train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True)
+    val_ds = TokenWindowDataset(args.token_directory / 'val.bin', args.context_length)
+    val_loader = DataLoader(val_ds, batch_size=args.batch_size, shuffle=True)
+
+    logger.info("setting up network")
+    model = TransformerModel(
+        args.vocab_size, args.context_length,
+        args.model_dimension, args.hidden_dimension,
+        args.head, args.layers,
+        args.dropout
+    )
+
+    logger.info("setting up optimizer")
+    optimizer = optim.Adam(model.parameters(), lr=1e-4)
+    scheduler = LinearLR(optimizer, 0.01, 1.0, total_iters=1000)
+    loss_fcn = nn.NLLLoss()  # ignore_index=padding_idx)
+
+    logger.info("starting training loop")
+    times = []
+    for epoch in range(args.epochs):
+        time_start = time.time()
+        loss_this_epoch = 0.0
+        random.seed(args.seed + epoch)
+
+        for xb, yb in train_loader:
+            probs = model(xb)
+            loss = loss_fcn(probs, yb)
+            model.zero_grad()
+            loss.backward()
+            nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            optimizer.step()
+            loss_this_epoch += loss.item()
+            scheduler.step()
+
+        model.eval()
+
+        perplexity, v_loss = evaluate_perplexity(model, val_loader, device)
+
+        time_stop = time.time()
+        runtime = time_stop - time_start
+        times.append(runtime)
+        logger.info(
+            f"epoch {epoch} ({runtime:.3f} sec): lr: {scheduler.get_last_lr()[0]}, train loss: {loss_this_epoch}, dev loss {v_loss}, dev perplexity: {perplexity:.3f}")
+        if perplexity <= 7.0:  # or v_loss < 30.0:
+            logger.info('required perplexity met, stopping training')
+            break
+        model.train()
