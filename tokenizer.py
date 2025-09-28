@@ -49,6 +49,7 @@ if __name__ == '__main__':
     parser.add_argument('--validation-ratio', type=float, default=0.2, help='the ratio of validation set size')
     parser.add_argument('--token-directory', type=pathlib.Path, default=pathlib.Path("."), help='Path to the output token directory')
     parser.add_argument('--vocab-size', type=int, default=1000, help='the size of the vocabulary to train')
+    parser.add_argument('--downsample', type=int, default=None, help='if included, downsamples to only include n documents')
     args = parser.parse_args()
 
     logger.info('training tokenizer...')
@@ -117,8 +118,13 @@ if __name__ == '__main__':
         tokens = tokenizer([line])['input_ids'][0]
         token_documents.append(tokens)
 
-    train_size = int(len(token_documents) * (1 - args.validation_ratio))
     random.shuffle(token_documents)
+
+    if args.downsample is not None:
+        logger.info(f'downsampling to {args.downsample} doucments...')
+        token_documents = token_documents[:args.downsample]
+
+    train_size = int(len(token_documents) * (1 - args.validation_ratio))
     train_documents = token_documents[:train_size]
     valid_documents = token_documents[train_size:]
 
