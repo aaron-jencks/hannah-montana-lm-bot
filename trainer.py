@@ -252,6 +252,7 @@ if __name__ == "__main__":
             bi += 1
             pbar.update(1)
 
+        pbar.close()
         model.eval()
 
         perplexity = evaluate_perplexity(model, val_loader, device)
@@ -259,11 +260,7 @@ if __name__ == "__main__":
         time_stop = time.time()
         runtime = time_stop - time_start
         times.append(runtime)
-        logger.info(
-            f"epoch {epoch} ({runtime:.3f} sec): lr: {scheduler.get_last_lr()[0]}, train loss: {loss_this_epoch}, dev perplexity: {perplexity:.3f}")
-        if perplexity <= 7.0:  # or v_loss < 30.0:
-            logger.info('required perplexity met, stopping training')
-            break
+        logger.info(f"epoch {epoch} ({runtime:.3f} sec): lr: {scheduler.get_last_lr()[0]}, train loss: {loss_this_epoch}, dev perplexity: {perplexity:.3f}")
 
         logger.info(f'saving model to {args.checkpoint_directory}')
         model_file_name = args.checkpoint_directory / f'model-{epoch}.pt'
