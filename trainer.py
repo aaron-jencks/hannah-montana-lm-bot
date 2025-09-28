@@ -199,7 +199,7 @@ if __name__ == "__main__":
     logger.info("setting up network")
     if args.resume:
         logger.info(f"loading checkpoint {args.resume}")
-        model = torch.load(args.resume).to(device)
+        model = torch.load(args.resume, weights_only=False).to(device)
     else:
         model = TransformerModel(
             args.vocab_size, args.context,
