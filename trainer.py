@@ -170,6 +170,7 @@ if __name__ == "__main__":
     parser.add_argument('--dropout', type=float, default=0.1, help='the dropout rate of the transformer')
     parser.add_argument('--seed', type=int, default=42, help='the random seed')
     parser.add_argument('--vocab-size', type=int, default=1000, help='the size of the vocab')
+    parser.add_argument('--resume', type=pathlib.Path, default=None, help='the location of the pretrained model to resume')
     args = parser.parse_args()
 
     os.makedirs(args.checkpoint_directory, exist_ok=True)
@@ -196,12 +197,16 @@ if __name__ == "__main__":
     mini_val_loader = DataLoader(mini_val_ds, batch_size=args.batch_size, shuffle=True, num_workers=1, pin_memory=False)
 
     logger.info("setting up network")
-    model = TransformerModel(
-        args.vocab_size, args.context,
-        args.model_dimension, args.model_dimension * 4,
-        args.head, args.layers,
-        args.dropout
-    ).to(device)
+    if args.resume:
+        logger.info(f"loading checkpoint {args.resume}")
+        model = torch.load(args.resume).to(device)
+    else:
+        model = TransformerModel(
+            args.vocab_size, args.context,
+            args.model_dimension, args.model_dimension * 4,
+            args.head, args.layers,
+            args.dropout
+        ).to(device)
 
     logger.info("setting up optimizer")
     optimizer = optim.Adam(model.parameters(), lr=1e-4)
