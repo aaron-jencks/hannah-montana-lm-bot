@@ -63,6 +63,20 @@ class TokenWindowDataset(Dataset):
         return x, y
 
 
+class SampledTokenWindowDataset(TokenWindowDataset):
+    def __init__(self, path: pathlib.Path, block_size: int, dtype: np.dtype = np.uint16, samples: int = 2048):
+        super().__init__(path, block_size, dtype)
+        self.samples = samples
+        self.sample_ids = np.asarray(random.sample(list(range(self.num_windows)), samples))
+
+    def __len__(self):
+        return self.samples
+
+    def __getitem__(self, idx):
+        window_idxs = self.sample_ids[idx]
+        return super().__getitem__(window_idxs)
+
+
 # https://pytorch-tutorials-preview.netlify.app/beginner/transformer_tutorial.html
 class PositionalEncoding(nn.Module):
     def __init__(self, d_model: int, dropout: float, max_len: int):
@@ -178,6 +192,8 @@ if __name__ == "__main__":
     train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True, num_workers=1, pin_memory=False)
     val_ds = TokenWindowDataset(args.token_directory / 'valid.bin', args.context)
     val_loader = DataLoader(val_ds, batch_size=args.batch_size, shuffle=True, num_workers=1, pin_memory=False)
+    mini_val_ds = SampledTokenWindowDataset(args.token_directory / 'valid.bin', args.context)
+    mini_val_loader = DataLoader(mini_val_ds, batch_size=args.batch_size, shuffle=True, num_workers=1, pin_memory=False)
 
     logger.info("setting up network")
     model = TransformerModel(
@@ -217,7 +233,7 @@ if __name__ == "__main__":
             if bi % 1000 == 0:
                 pbar.close()
                 model.eval()
-                perplexity, v_loss = evaluate_perplexity(model, val_loader, device)
+                perplexity = evaluate_perplexity(model, mini_val_loader, device)
                 logger.info(f'epoch {epoch + 1}, batch {bi}, loss {loss.item():.4f}, perplexity {perplexity:.4f}')
                 logger.info(f'saving model to {args.checkpoint_directory}')
                 model_file_name = args.checkpoint_directory / f'model-{epoch}-partial.pt'
