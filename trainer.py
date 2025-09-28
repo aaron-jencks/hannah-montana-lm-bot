@@ -1,5 +1,6 @@
 import argparse
 import logging
+import os
 import pathlib
 import random
 import time
@@ -10,6 +11,7 @@ from torch import nn
 from torch import optim
 from torch.optim.lr_scheduler import LinearLR
 from torch.utils.data import Dataset, DataLoader
+from tqdm import tqdm
 from transformers import GPT2TokenizerFast
 
 logging.basicConfig(level=logging.INFO)
@@ -120,7 +122,7 @@ def evaluate_perplexity(model: nn.Module, val_loader: DataLoader, device: str = 
 
     nll_loss = nn.NLLLoss(ignore_index=-100, reduction="sum")
 
-    for x, y in val_loader:
+    for x, y in tqdm(val_loader, desc="evaluating", unit="batch"):
         x = x.to(device)
         y = y.to(device)
 
@@ -143,20 +145,20 @@ def evaluate_perplexity(model: nn.Module, val_loader: DataLoader, device: str = 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--token-directory', type=pathlib.Path, default=pathlib.Path('.'), help='the location of the tokens')
-    parser.add_argument('--checkpoint-directory', type=pathlib.Path, default=pathlib.Path('.'), help='the location to store model checkpoints')
+    parser.add_argument('--checkpoint-directory', type=pathlib.Path, default=pathlib.Path('./checkpoints'), help='the location to store model checkpoints')
     parser.add_argument('--epochs', type=int, default=100, help='the number of epochs to train')
-    parser.add_argument('--batch-size', type=int, default=64, help='the batch size for training')
+    parser.add_argument('--batch-size', type=int, default=32, help='the batch size for training')
     parser.add_argument('--lr', type=float, default=0.0001, help='the initial learning rate')
-    parser.add_argument('--context', type=int, default=1024, help='the context size of the transformer')
-    parser.add_argument('--head', type=int, default=12, help='the head size of the transformer')
-    parser.add_argument('--layers', type=int, default=12, help='the number of layers of the transformer')
-    parser.add_argument('--model-dimension', type=int, default=768, help='the dimension of the model')
-    parser.add_argument('--hidden-dimension', type=int, default=2048, help='the internal dimension of the model')
+    parser.add_argument('--context', type=int, default=512, help='the context size of the transformer')
+    parser.add_argument('--head', type=int, default=4, help='the head size of the transformer')
+    parser.add_argument('--layers', type=int, default=6, help='the number of layers of the transformer')
+    parser.add_argument('--model-dimension', type=int, default=256, help='the dimension of the model')
     parser.add_argument('--dropout', type=float, default=0.1, help='the dropout rate of the transformer')
     parser.add_argument('--seed', type=int, default=42, help='the random seed')
     parser.add_argument('--vocab-size', type=int, default=1000, help='the size of the vocab')
-    parser.add_argument('--context-length', type=int, default=1024, help='the maximum sequence length')
     args = parser.parse_args()
+
+    os.makedirs(args.checkpoint_directory, exist_ok=True)
 
     use_cuda = torch.cuda.is_available()
     device = 'cpu' if not use_cuda else 'cuda'
@@ -172,18 +174,18 @@ if __name__ == "__main__":
         torch.backends.cudnn.benchmark = False
 
     logger.info(f'Loading tokens from {str(args.token_directory)}')
-    train_ds = TokenWindowDataset(args.token_directory / 'train.bin', args.context_length)
-    train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True)
-    val_ds = TokenWindowDataset(args.token_directory / 'val.bin', args.context_length)
-    val_loader = DataLoader(val_ds, batch_size=args.batch_size, shuffle=True)
+    train_ds = TokenWindowDataset(args.token_directory / 'train.bin', args.context)
+    train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True, num_workers=1, pin_memory=False)
+    val_ds = TokenWindowDataset(args.token_directory / 'valid.bin', args.context)
+    val_loader = DataLoader(val_ds, batch_size=args.batch_size, shuffle=True, num_workers=1, pin_memory=False)
 
     logger.info("setting up network")
     model = TransformerModel(
-        args.vocab_size, args.context_length,
-        args.model_dimension, args.hidden_dimension,
+        args.vocab_size, args.context,
+        args.model_dimension, args.model_dimension * 4,
         args.head, args.layers,
         args.dropout
-    )
+    ).to(device)
 
     logger.info("setting up optimizer")
     optimizer = optim.Adam(model.parameters(), lr=1e-4)
@@ -197,26 +199,53 @@ if __name__ == "__main__":
         loss_this_epoch = 0.0
         random.seed(args.seed + epoch)
 
+        bi = 0
+        pbar = tqdm(total=len(train_loader), desc=f"training epoch {epoch + 1}", unit="batch")
         for xb, yb in train_loader:
+            xb = xb.to(device)
+            yb = yb.to(device)
             probs = model(xb)
-            loss = loss_fcn(probs, yb)
+            loss = loss_fcn(
+                probs.view(-1, probs.size(-1)),  # (B*T, V)
+                yb.view(-1)  # (B*T,)
+            )
             model.zero_grad()
             loss.backward()
             nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
+
+            if bi % 1000 == 0:
+                pbar.close()
+                model.eval()
+                perplexity, v_loss = evaluate_perplexity(model, val_loader, device)
+                logger.info(f'epoch {epoch + 1}, batch {bi}, loss {loss.item():.4f}, perplexity {perplexity:.4f}')
+                logger.info(f'saving model to {args.checkpoint_directory}')
+                model_file_name = args.checkpoint_directory / f'model-{epoch}-partial.pt'
+                torch.save(model, model_file_name)
+                model.train()
+                pbar = tqdm(total=len(train_loader), desc=f"training epoch {epoch + 1}", unit="batch")
+                pbar.update(bi)
+
             loss_this_epoch += loss.item()
             scheduler.step()
+            bi += 1
+            pbar.update(1)
 
         model.eval()
 
-        perplexity, v_loss = evaluate_perplexity(model, val_loader, device)
+        perplexity = evaluate_perplexity(model, val_loader, device)
 
         time_stop = time.time()
         runtime = time_stop - time_start
         times.append(runtime)
         logger.info(
-            f"epoch {epoch} ({runtime:.3f} sec): lr: {scheduler.get_last_lr()[0]}, train loss: {loss_this_epoch}, dev loss {v_loss}, dev perplexity: {perplexity:.3f}")
+            f"epoch {epoch} ({runtime:.3f} sec): lr: {scheduler.get_last_lr()[0]}, train loss: {loss_this_epoch}, dev perplexity: {perplexity:.3f}")
         if perplexity <= 7.0:  # or v_loss < 30.0:
             logger.info('required perplexity met, stopping training')
             break
+
+        logger.info(f'saving model to {args.checkpoint_directory}')
+        model_file_name = args.checkpoint_directory / f'model-{epoch}.pt'
+        torch.save(model, model_file_name)
+
         model.train()
