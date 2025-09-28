@@ -30,9 +30,9 @@ class ModelWrapper:
 
     def generate_story(self, title: str, prefix: str) -> str:
         context = f'<document> <title> {title} </title> <story> {prefix}'
-        idxs = self.tokenizer.encode(context)
+        encoding = self.tokenizer.encode(context)
 
-        new_context = self.get_context_window(idxs)
+        new_context = self.get_context_window(encoding)
         input_tensor = torch.LongTensor([new_context]).to(self.device)
 
         print(title)
@@ -45,25 +45,26 @@ class ModelWrapper:
                 next_id = torch.multinomial(probs, num_samples=1).item()
 
             token_str = tokenizer.decode([next_id], clean_up_tokenization_spaces=False)
-            if token_str in [
-                '</title>',
-                '<title>',
-                '<story>',
-                '</story>',
-                '<document>',
-            ]:
-                continue
-            idxs.append(next_id)
+            # if token_str in [
+            #     '</title>',
+            #     '<title>',
+            #     '<story>',
+            #     '<document>',
+            # ]:
+            #     continue
+            encoding.append(next_id)
             if next_id == self.tokenizer.eos_token_id:
                 break
             if token_str == '<br>':
                 print()
+            # elif token_str == '</story>':
+            #     pass
             else:
                 print(token_str, end="", flush=True)
-            new_context = self.get_context_window(idxs)
+            new_context = self.get_context_window(encoding)
             input_tensor = torch.LongTensor([new_context]).to(self.device)
 
-        generated_story = tokenizer.decode(idxs)
+        generated_story = tokenizer.decode(encoding)
         return generated_story
 
     def get_next_character_probs(self, input_tensor: torch.Tensor) -> torch.Tensor:
@@ -112,6 +113,7 @@ if __name__ == "__main__":
 
     logger.info('loading model...')
     model = torch.load(args.model_path, weights_only=False).to(device)
+    model.eval()
 
     cls = ModelWrapper(model, tokenizer, args.context_size, device)
 
