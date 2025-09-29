@@ -67,6 +67,8 @@ class SampledTokenWindowDataset(TokenWindowDataset):
     def __init__(self, path: pathlib.Path, block_size: int, dtype: np.dtype = np.uint16, samples: int = 2048):
         super().__init__(path, block_size, dtype)
         self.samples = samples
+        if self.samples < self.num_windows:
+            logger.warn(f'number of samples exceeds number of windows ({self.samples} > {self.num_windows})')
         self.sample_ids = np.asarray(random.sample(list(range(self.num_windows)), samples))
 
     def __len__(self):
