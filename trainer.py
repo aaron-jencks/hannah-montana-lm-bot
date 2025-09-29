@@ -68,7 +68,7 @@ class SampledTokenWindowDataset(TokenWindowDataset):
         super().__init__(path, block_size, dtype)
         self.samples = samples
         if self.samples < self.num_windows:
-            logger.warn(f'number of samples exceeds number of windows ({self.samples} > {self.num_windows})')
+            logger.warning(f'number of samples exceeds number of windows ({self.samples} > {self.num_windows})')
         self.sample_ids = np.asarray(random.sample(list(range(self.num_windows)), samples))
 
     def __len__(self):
@@ -211,9 +211,22 @@ if __name__ == "__main__":
         ).to(device)
 
     logger.info("setting up optimizer")
-    optimizer = optim.Adam(model.parameters(), lr=1e-4)
-    scheduler = LinearLR(optimizer, 0.01, 1.0, total_iters=1000)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, betas=(0.9,0.95), weight_decay=0.1)
+    warmup = torch.optim.lr_scheduler.LinearLR(
+        optimizer, start_factor=1e-3, end_factor=1.0, total_iters=400  # 400 warmup steps
+    )
+    cosine = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+        optimizer, T_0=int(len(train_loader) * 0.9), T_mult=1, eta_min=args.lr * 0.1  # endless cycles
+    )
+    scheduler = torch.optim.lr_scheduler.SequentialLR(
+        optimizer, schedulers=[warmup, cosine], milestones=[400]
+    )
     loss_fcn = nn.NLLLoss()  # ignore_index=padding_idx)
+
+    logger.info('setting up training optimizations...')
+    eval_steps = len(train_loader) // 100
+    logger.info(f'will eval every {eval_steps} steps')
+    scaler = torch.amp.GradScaler(device)
 
     logger.info("starting training loop")
     times = []
@@ -227,17 +240,20 @@ if __name__ == "__main__":
         for xb, yb in train_loader:
             xb = xb.to(device)
             yb = yb.to(device)
-            probs = model(xb)
-            loss = loss_fcn(
-                probs.view(-1, probs.size(-1)),  # (B*T, V)
-                yb.view(-1)  # (B*T,)
-            )
-            model.zero_grad()
-            loss.backward()
+            optimizer.zero_grad(set_to_none=True)
+            with torch.amp.autocast(device):
+                probs = model(xb)
+                loss = loss_fcn(
+                    probs.view(-1, probs.size(-1)),  # (B*T, V)
+                    yb.view(-1)  # (B*T,)
+                )
+            scaler.scale(loss).backward()
+            scaler.unscale_(optimizer)
             nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-            optimizer.step()
+            scaler.step(optimizer)
+            scaler.update()
 
-            if bi % 1000 == 0:
+            if bi % eval_steps == 0:
                 pbar.close()
                 model.eval()
                 perplexity = evaluate_perplexity(model, mini_val_loader, device)
