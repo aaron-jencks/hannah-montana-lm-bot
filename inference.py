@@ -80,6 +80,8 @@ if __name__ == "__main__":
     parser.add_argument("--tokenizer-directory", type=pathlib.Path, default=pathlib.Path('.'), help="Path to the tokenizer")
     parser.add_argument('--tokenizer-name', type=str, default='bpe-bytelevel', help="Name of the tokenizer")
     parser.add_argument('--context-size', type=int, default=512, help="Size of the context window")
+    parser.add_argument('--title', type=str, default=None, help="Title of the story")
+    parser.add_argument('--prefix', type=str, default=None, help="Prefix of the story")
     args = parser.parse_args()
 
     use_cuda = torch.cuda.is_available()
@@ -118,8 +120,12 @@ if __name__ == "__main__":
     cls = ModelWrapper(model, tokenizer, args.context_size, device)
 
     logger.info('ready to generate story...')
-    title = input('Enter title: ')
-    prefix = input('Enter prefix: ')
+    title = args.title
+    if title is None:
+        title = input('Enter title: ')
+    prefix = args.prefix
+    if prefix is None:
+        prefix = input('Enter prefix: ')
     generated_story = cls.generate_story(title, prefix)
 
     logger.info('story generated')
