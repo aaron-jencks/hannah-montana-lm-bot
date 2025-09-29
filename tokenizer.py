@@ -52,6 +52,8 @@ if __name__ == '__main__':
     parser.add_argument('--downsample', type=int, default=None, help='if included, downsamples to only include n documents')
     args = parser.parse_args()
 
+    os.makedirs(args.token_directory, exist_ok=True)
+
     logger.info('training tokenizer...')
     # Initialize an empty tokenizer
     tokenizer = ByteLevelBPETokenizer(add_prefix_space=True)
@@ -114,7 +116,7 @@ if __name__ == '__main__':
     logger.info(f'tokens: {tokenizer.convert_ids_to_tokens(first_row_ids)}')
 
     token_documents = []
-    for line in lines:
+    for line in tqdm(lines, desc='tokenizing', unit='documents'):
         tokens = tokenizer([line])['input_ids'][0]
         token_documents.append(tokens)
 
