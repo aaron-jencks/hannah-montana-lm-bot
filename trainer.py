@@ -10,7 +10,7 @@ import numpy as np
 import torch
 from torch import nn
 from torch.utils.data import Dataset, DataLoader
-from tqdm import tqdm
+from tqdm.auto import tqdm
 from transformers import GPT2TokenizerFast
 import wandb
 
@@ -138,7 +138,8 @@ def evaluate_perplexity(model: nn.Module, val_loader: DataLoader, device: str = 
 
     nll_loss = nn.NLLLoss(ignore_index=-100, reduction="sum")
 
-    for x, y in tqdm(val_loader, desc="evaluating", unit="batch"):
+    # pbar = tqdm(total=len(val_loader), desc="evaluating", unit="batch")
+    for x, y in val_loader:
         x = x.to(device)
         y = y.to(device)
 
@@ -152,6 +153,8 @@ def evaluate_perplexity(model: nn.Module, val_loader: DataLoader, device: str = 
 
         total_loss += loss.item()
         total_tokens += y.sum().item()
+        # pbar.update(1)
+    # pbar.close()
 
     avg_nll = total_loss / total_tokens
     ppl = torch.exp(torch.tensor(avg_nll))
@@ -173,6 +176,7 @@ if __name__ == "__main__":
     parser.add_argument('--seed', type=int, default=42, help='the random seed')
     parser.add_argument('--vocab-size', type=int, default=1000, help='the size of the vocab')
     parser.add_argument('--resume', type=pathlib.Path, default=None, help='the location of the pretrained model to resume')
+    parser.add_argument('wandb_team', type=str, help='the name of the wandb team to push to')
     args = parser.parse_args()
 
     os.makedirs(args.checkpoint_directory, exist_ok=True)
@@ -229,9 +233,10 @@ if __name__ == "__main__":
     scaler = torch.amp.GradScaler(device)
 
     logger.info('setting up wandb...')
+    # os.environ["WANDB_CONSOLE"] = "off"
     run = wandb.init(
         project="hannah-montana-pretrain",  # your project bucket
-        entity="aaron-jencks",  # your personal username or the team name
+        entity=args.wandb_team,  # your personal username or the team name
         name=f"{datetime.datetime.now().strftime('%m-%d-%Y T %H:%M:%S')}",  # optional
         config={
             "lr": args.lr,
@@ -243,7 +248,8 @@ if __name__ == "__main__":
             "dropout": args.dropout,
             "seed": args.seed,
             "vocab": args.vocab_size,
-        }
+        },
+        # settings=wandb.Settings(console="off")
     )
     wandb.define_metric("global_step")
     wandb.define_metric("train/*", step_metric="global_step")
@@ -270,7 +276,7 @@ if __name__ == "__main__":
                     probs.view(-1, probs.size(-1)),  # (B*T, V)
                     yb.view(-1)  # (B*T,)
                 )
-            wandb.log({"train/loss": loss.item(), "epoch": epoch, "global_step": global_step})
+            wandb.log({"train/loss": loss.item(), "epoch": epoch, "global_step": global_step, "learning_rate": scheduler.get_last_lr()[0]})
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
             nn.utils.clip_grad_norm_(model.parameters(), 1.0)
