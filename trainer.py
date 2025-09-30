@@ -1,4 +1,5 @@
 import argparse
+import datetime
 import logging
 import os
 import pathlib
@@ -8,11 +9,10 @@ import time
 import numpy as np
 import torch
 from torch import nn
-from torch import optim
-from torch.optim.lr_scheduler import LinearLR
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 from transformers import GPT2TokenizerFast
+import wandb
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -228,8 +228,31 @@ if __name__ == "__main__":
     logger.info(f'will eval every {eval_steps} steps')
     scaler = torch.amp.GradScaler(device)
 
+    logger.info('setting up wandb...')
+    run = wandb.init(
+        project="hannah-montana-pretrain",  # your project bucket
+        entity="aaron-jencks",  # your personal username or the team name
+        name=f"{datetime.datetime.now().strftime('%m-%d-%Y T %H:%M:%S')}",  # optional
+        config={
+            "lr": args.lr,
+            "ctx": args.context,
+            "batch": args.batch_size,
+            "heads": args.head,
+            "d_model": args.model_dimension,
+            "layers": args.layers,
+            "dropout": args.dropout,
+            "seed": args.seed,
+            "vocab": args.vocab_size,
+        }
+    )
+    wandb.define_metric("global_step")
+    wandb.define_metric("train/*", step_metric="global_step")
+    wandb.define_metric("val/*", step_metric="global_step")
+    wandb.define_metric("val/ppl", summary="min")
+
     logger.info("starting training loop")
     times = []
+    global_step = 0
     for epoch in range(args.epochs):
         time_start = time.time()
         loss_this_epoch = 0.0
@@ -247,6 +270,7 @@ if __name__ == "__main__":
                     probs.view(-1, probs.size(-1)),  # (B*T, V)
                     yb.view(-1)  # (B*T,)
                 )
+            wandb.log({"train/loss": loss.item(), "epoch": epoch, "global_step": global_step})
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
             nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -254,21 +278,22 @@ if __name__ == "__main__":
             scaler.update()
 
             if bi % eval_steps == 0:
-                pbar.close()
+                pbar.clear()
                 model.eval()
                 perplexity = evaluate_perplexity(model, mini_val_loader, device)
+                wandb.log({"val/ppl": perplexity, "epoch": epoch, "global_step": global_step})
                 logger.info(f'epoch {epoch + 1}, batch {bi}, loss {loss.item():.4f}, perplexity {perplexity:.4f}')
                 logger.info(f'saving model to {args.checkpoint_directory}')
                 model_file_name = args.checkpoint_directory / f'model-{epoch}-partial.pt'
                 torch.save(model, model_file_name)
                 model.train()
-                pbar = tqdm(total=len(train_loader), desc=f"training epoch {epoch + 1}", unit="batch")
-                pbar.update(bi)
+                pbar.refresh()
 
             loss_this_epoch += loss.item()
             scheduler.step()
             bi += 1
             pbar.update(1)
+            global_step += 1
 
         pbar.close()
         model.eval()
@@ -285,3 +310,5 @@ if __name__ == "__main__":
         torch.save(model, model_file_name)
 
         model.train()
+
+    run.finish()
