@@ -5,6 +5,7 @@ import os
 import pathlib
 import random
 import time
+from typing import Tuple
 
 import numpy as np
 import torch
@@ -131,14 +132,14 @@ class TransformerModel(nn.Module):
 
 
 @torch.no_grad()
-def evaluate_perplexity(model: nn.Module, val_loader: DataLoader, device: str = "cuda"):
+def evaluate_perplexity(model: nn.Module, val_loader: DataLoader, device: str = "cuda", use_bar: bool = True) -> Tuple[float, float]:
     model.eval()
     total_loss = 0.0
     total_tokens = 0
 
-    nll_loss = nn.NLLLoss(ignore_index=-100, reduction="sum")
-
-    # pbar = tqdm(total=len(val_loader), desc="evaluating", unit="batch")
+    pbar = None
+    if use_bar:
+        pbar = tqdm(total=len(val_loader), desc="evaluating", unit="batch")
     for x, y in val_loader:
         x = x.to(device)
         y = y.to(device)
@@ -146,19 +147,22 @@ def evaluate_perplexity(model: nn.Module, val_loader: DataLoader, device: str = 
         # model must return log-probs: (B, T, V)
         log_probs = model(x)
 
-        loss = nll_loss(
+        loss = nn.functional.nll_loss(
             log_probs.view(-1, log_probs.size(-1)),
-            y.view(-1)
+            y.view(-1),
+            reduction="sum",
         )
 
         total_loss += loss.item()
-        total_tokens += y.sum().item()
-        # pbar.update(1)
-    # pbar.close()
+        total_tokens += y.numel()
+        if pbar is not None:
+            pbar.update(1)
+    if pbar is not None:
+        pbar.close()
 
     avg_nll = total_loss / total_tokens
     ppl = torch.exp(torch.tensor(avg_nll))
-    return ppl.item()
+    return ppl.item(), avg_nll
 
 
 if __name__ == "__main__":
@@ -253,6 +257,8 @@ if __name__ == "__main__":
     )
     wandb.define_metric("global_step")
     wandb.define_metric("train/*", step_metric="global_step")
+    wandb.define_metric("tiny_val/*", step_metric="global_step")
+    wandb.define_metric("tiny_val/ppl", summary="min")
     wandb.define_metric("val/*", step_metric="global_step")
     wandb.define_metric("val/ppl", summary="min")
 
@@ -286,8 +292,8 @@ if __name__ == "__main__":
             if bi % eval_steps == 0:
                 pbar.clear()
                 model.eval()
-                perplexity = evaluate_perplexity(model, mini_val_loader, device)
-                wandb.log({"val/ppl": perplexity, "epoch": epoch, "global_step": global_step})
+                perplexity, vloss = evaluate_perplexity(model, mini_val_loader, device, False)
+                wandb.log({"tiny_val/ppl": perplexity, "tiny_val/loss": vloss, "epoch": epoch, "global_step": global_step})
                 logger.info(f'epoch {epoch + 1}, batch {bi}, loss {loss.item():.4f}, perplexity {perplexity:.4f}')
                 logger.info(f'saving model to {args.checkpoint_directory}')
                 model_file_name = args.checkpoint_directory / f'model-{epoch}-partial.pt'
@@ -304,11 +310,12 @@ if __name__ == "__main__":
         pbar.close()
         model.eval()
 
-        perplexity = evaluate_perplexity(model, val_loader, device)
+        perplexity, vloss = evaluate_perplexity(model, val_loader, device)
 
         time_stop = time.time()
         runtime = time_stop - time_start
         times.append(runtime)
+        wandb.log({"val/ppl": perplexity, "val/loss": vloss, "epoch": epoch, "global_step": global_step})
         logger.info(f"epoch {epoch} ({runtime:.3f} sec): lr: {scheduler.get_last_lr()[0]}, train loss: {loss_this_epoch}, dev perplexity: {perplexity:.3f}")
 
         logger.info(f'saving model to {args.checkpoint_directory}')
