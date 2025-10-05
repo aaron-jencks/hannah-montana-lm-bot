@@ -69,6 +69,7 @@ if __name__ == '__main__':
             '<story>', '</story>',
             '<br>',
             '<document>', '</document>',
+            '<pad>', '<unk>'
         ]
     )
 
