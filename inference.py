@@ -21,12 +21,15 @@ class ModelWrapper:
         self.context_size = context_size
 
     def get_context_window(self, current_story: List[int]) -> List[int]:
-        if len(current_story) < self.context_size:
-            return [tokenizer.pad_token_type_id] * (self.context_size - len(current_story)) + current_story
-        elif len(current_story) == self.context_size:
-            return current_story
-        else:
+        # if len(current_story) < self.context_size:
+        #     return [tokenizer.pad_token_id] * (self.context_size - len(current_story)) + current_story
+        # elif len(current_story) == self.context_size:
+        #     return current_story
+        # else:
+        #     return current_story[-self.context_size:]
+        if len(current_story) > self.context_size:
             return current_story[-self.context_size:]
+        return current_story
 
     def generate_story(self, title: str, prefix: str) -> str:
         context = f'<document> <title> {title} </title> <story> {prefix}'
@@ -34,13 +37,14 @@ class ModelWrapper:
 
         new_context = self.get_context_window(encoding)
         input_tensor = torch.LongTensor([new_context]).to(self.device)
+        # padding_mask = (input_tensor == self.tokenizer.pad_token_id)
 
         print(title)
         print(prefix.replace('<br>', '\n'), end='', flush=True)
 
         while True:
             with torch.no_grad():
-                out = self.model(input_tensor)
+                out = self.model(input_tensor)  # , key_padding_mask=padding_mask)
                 probs = torch.exp(out.squeeze(0)[-1])
                 next_id = torch.multinomial(probs, num_samples=1).item()
 
@@ -85,7 +89,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     use_cuda = torch.cuda.is_available()
-    device = 'cpu' if not use_cuda else 'cuda'
+    device = 'cpu'  # if not use_cuda else 'cuda'
     logger.info(f'Using device: {device}')
 
     logger.info('loading tokenizer...')
