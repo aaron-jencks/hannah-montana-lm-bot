@@ -174,6 +174,7 @@ def evaluate_perplexity(model: nn.Module, val_loader: DataLoader, device: str = 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+    parser.add_argument('--run-name', type=str, default='debug', help="run name")
     parser.add_argument('--token-directory', type=pathlib.Path, default=pathlib.Path('.'), help='the location of the tokens')
     parser.add_argument('--checkpoint-directory', type=pathlib.Path, default=pathlib.Path('./checkpoints'), help='the location to store model checkpoints')
     parser.add_argument('--epochs', type=int, default=100, help='the number of epochs to train')
@@ -244,11 +245,13 @@ if __name__ == "__main__":
     scaler = torch.amp.GradScaler(device)
 
     logger.info('setting up wandb...')
+    name = f"{datetime.datetime.now().strftime('%m-%d-%Y T %H:%M:%S')} {args.run_name}"
+    logger.info(f'run name: {name}')
     # os.environ["WANDB_CONSOLE"] = "off"
     run = wandb.init(
         project="hannah-montana-pretrain",  # your project bucket
         entity=args.wandb_team,  # your personal username or the team name
-        name=f"{datetime.datetime.now().strftime('%m-%d-%Y T %H:%M:%S')}",  # optional
+        name=name,  # optional
         config={
             "lr": args.lr,
             "ctx": args.context,
