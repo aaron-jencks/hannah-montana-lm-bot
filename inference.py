@@ -68,6 +68,8 @@ class ModelWrapper:
             new_context = self.get_context_window(encoding)
             input_tensor = torch.LongTensor([new_context]).to(self.device)
 
+        print()
+
         generated_story = tokenizer.decode(encoding)
         return generated_story
 
@@ -89,7 +91,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     use_cuda = torch.cuda.is_available()
-    device = 'cpu'  # if not use_cuda else 'cuda'
+    device = 'cpu' if not use_cuda else 'cuda'
     logger.info(f'Using device: {device}')
 
     logger.info('loading tokenizer...')
