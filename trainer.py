@@ -113,19 +113,26 @@ class TransformerModel(nn.Module):
         self.pos_encoder = PositionalEncoding(d_model, dropout, seq_length)
         encoder_layer = nn.TransformerEncoderLayer(d_model, n_heads, d_hidden, dropout, batch_first=True)
         self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=layers)
-        self.input_mask = nn.Buffer(torch.triu(torch.ones(seq_length, seq_length), diagonal=1).bool())
+        # self.input_mask = nn.Buffer(torch.triu(torch.ones(seq_length, seq_length), diagonal=1).bool())
+        # self.register_buffer('input_mask', self.input_mask, persistent=False)
         self.linear = nn.Linear(d_model, vocab_size)
         self.softmax = nn.LogSoftmax(dim=-1)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, key_padding_mask = None) -> torch.Tensor:
         """
         Arguments:
         :param x: shape ``[batch_size, seq_len]``
+        :param key_padding_mask: shape ``[batch_size, seq_len]``
         :return:
         """
+        S = x.size(1)
         x = self.embed(x) # [batch_size, seq_len, d_model]
         x = self.pos_encoder(x) # [batch_size, seq_len, d_model]
-        x = self.encoder(x, mask=self.input_mask) # [batch_size, seq_len, d_model]
+        attn_mask = nn.Transformer.generate_square_subsequent_mask(S, device=x.device)
+        if key_padding_mask is not None:
+            x = self.encoder(x, mask=attn_mask, is_causal=True, src_key_padding_mask=key_padding_mask)
+        else:
+            x = self.encoder(x, mask=attn_mask, is_causal=True) # [batch_size, seq_len, d_model]
         x = self.linear(x) # [batch_size, seq_len, vocab_size]
         x = self.softmax(x)
         return x
