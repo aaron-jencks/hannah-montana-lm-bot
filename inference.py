@@ -31,6 +31,47 @@ class ModelWrapper:
             return current_story[-self.context_size:]
         return current_story
 
+    def sample_tokens(
+            self,
+            logits: torch.Tensor,
+            temperature: float, top_k: int, top_p: float, repetition_penalty: float,
+            recents: List[int], banned_tokens: List[str],
+    ) -> int:
+        x = logits.clone()
+        set_recents = set(recents)
+
+        # repetition penalty
+        if recents:
+            idx = torch.LongTensor(list(set_recents)).to(self.device)
+            x[idx] = x[idx] / repetition_penalty
+
+        if temperature != 1.0:
+            x = x / max(1e-6, temperature)
+
+        if top_k and top_k < x.numel():
+            thresh = torch.topk(x, top_k).values[-1]
+            x = torch.where(x >= thresh, x, torch.tensor(-float('inf'), device=self.device))
+
+        if top_p and 0.0 < top_p < 1.0:
+            vals, idxs = torch.sort(x, descending=True)
+            probs = torch.softmax(vals, dim=-1)
+            csum = torch.cumsum(probs, dim=-1)
+            mask = csum > top_p
+            mask[..., 0] = False
+            vals = torch.where(mask, torch.tensor(-float('inf'), device=self.device), vals)
+            x = torch.full_like(x, float('-inf'), device=self.device).scatter(0, idxs, vals)
+
+        dupes = set(recents[-3:])
+        while True:
+            tok = torch.distributions.Categorical(logits=x).sample().item()
+            if tok in dupes:
+                continue
+            tstr = self.tokenizer.decode(tok, clean_up_tokenization_spaces=True)
+            if tstr in banned_tokens:
+                continue
+            else:
+                return tok
+
     def generate_story(self, title: str, prefix: str) -> str:
         context = f'<document> <title> {title} </title> <story> {prefix}'
         encoding = self.tokenizer.encode(context)
@@ -46,9 +87,17 @@ class ModelWrapper:
             with torch.no_grad():
                 out = self.model(input_tensor)  # , key_padding_mask=padding_mask)
                 probs = torch.exp(out.squeeze(0)[-1])
-                next_id = torch.multinomial(probs, num_samples=1).item()
+                # next_id = torch.multinomial(probs, num_samples=1).item()
+                recent_ids = new_context if len(new_context) <= 64 else new_context[-64:]
+                next_id = self.sample_tokens(
+                    probs,
+                    0.7, 40, 0.9, 1.1,
+                    recents=recent_ids, banned_tokens=[
+                        '<pad>', '<title>', '</title>', '<document>', '<story>'
+                    ]
+                )
 
-            token_str = tokenizer.decode([next_id], clean_up_tokenization_spaces=False)
+            token_str = self.tokenizer.decode([next_id], clean_up_tokenization_spaces=False)
             # if token_str in [
             #     '</title>',
             #     '<title>',
